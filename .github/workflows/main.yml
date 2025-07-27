@@ -36,30 +36,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      # 第四步：安装Google Chrome和对应的ChromeDriver
+      # 第四步：安装Google Chrome和对应的ChromeDriver (已更新为正确版本)
       - name: Install Google Chrome and ChromeDriver
         run: |
-          # 安装Chrome稳定版
+          # 安装jq工具，用于解析JSON
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-          # 获取Chrome版本
-          CHROME_VERSION=$(google-chrome --version | cut -f 3 -d ' ' | cut -f 1 -d '.')
-          echo "Installed Chrome version: $CHROME_VERSION"
-          # 根据Chrome版本下载对应的ChromeDriver
-          wget -q https://storage.googleapis.com/chrome-for-testing-public/LATEST_RELEASE_${CHROME_VERSION} -O LATEST_RELEASE
-          DRIVER_VERSION=$(cat LATEST_RELEASE)
-          echo "Matching ChromeDriver version: $DRIVER_VERSION"
-          wget -q https://storage.googleapis.com/chrome-for-testing-public/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip
+          sudo apt-get install -y jq
+          # 获取已安装的Chrome的完整版本号
+          BROWSER_VERSION=$(google-chrome-stable --version | awk '{print $3}')
+          echo "Installed Chrome version: $BROWSER_VERSION"
+          # 从新的JSON API中查找与浏览器版本最匹配的ChromeDriver版本
+          DRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/latest-versions-per-milestone-with-downloads.json" | jq -r ".milestones[\"$(echo $BROWSER_VERSION | cut -d. -f1)\"].downloads.chromedriver[] | select(.platform==\"linux64\").url")
+          echo "Found matching ChromeDriver URL: $DRIVER_URL"
+          # 下载并解压
+          wget -q -O chromedriver-linux64.zip "$DRIVER_URL"
           unzip chromedriver-linux64.zip
           # 将chromedriver移动到系统路径，这样selenium才能找到它
           sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          # 检查版本以确认成功
+          chromedriver --version
 
       # 第五步：运行你的Python脚本
       - name: Run the scraper script
         env:
           # 将我们设置的秘密Cookie注入到环境变量中
           KLPBBS_COOKIE: ${{ secrets.KLPBBS_COOKIE }}
-        run: python 苦力怕脚本获取.py
+        run: python "苦力怕脚本获取.py"
 
       # 第六步：上传生成的Excel报告
       - name: Upload Excel report
