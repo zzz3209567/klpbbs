@@ -17,7 +17,6 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.utils import get_column_letter
 
-
 class KlpbbsScraper:
     """
     一个面向对象的网页爬虫，用于从Minecraft(我的世界)苦力怕论坛的用户个人主页抓取其所有主题帖信息。
@@ -37,6 +36,7 @@ class KlpbbsScraper:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"[{timestamp}] {message}")
 
+    # [已更新] 智能的WebDriver设置方法
     def _setup_driver(self):
         self._log("开始配置WebDriver (已启用混合动力优化)...")
         options = Options()
@@ -51,60 +51,62 @@ class KlpbbsScraper:
         options.add_experimental_option("prefs", prefs)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        service = Service(self.driver_path)
+        
+        # 判断是否在GitHub Actions环境中运行
+        is_github_actions = os.getenv('CI') == 'true'
+
         try:
-            self.driver = webdriver.Chrome(service=service, options=options)
+            if is_github_actions:
+                # 在GitHub Actions中，不指定驱动路径，让Selenium自动查找
+                self._log("在GitHub Actions环境中运行，自动检测ChromeDriver...")
+                self.driver = webdriver.Chrome(options=options)
+            else:
+                # 在本地环境中，使用我们手动指定的路径
+                self._log(f"在本地环境中运行，使用指定路径: {self.driver_path}")
+                service = Service(self.driver_path)
+                self.driver = webdriver.Chrome(service=service, options=options)
+            
             self._log("WebDriver启动成功。")
         except Exception as e:
             self._log(f"WebDriver启动失败: {e}")
             raise
 
-    # [已更新] 使用优化后的Cookie登录方法，包含关键的刷新步骤
     def _login_with_cookie(self, cookie_string: str):
         """使用提供的Cookie字符串登录（优化版）"""
         if not cookie_string or "在这里粘贴" in cookie_string:
             self._log("错误：Cookie字符串为空或未被替换。请先在脚本末尾填写Cookie。")
             raise ValueError("未提供有效的Cookie字符串。")
 
-        # 1. 先访问一次网站的根域名，这是设置Cookie的前提
         domain_url = "https://klpbbs.com"
         self._log(f"正在导航到主域 {domain_url} 以便设置Cookie...")
         self.driver.get(domain_url)
-
-        # 2. 清除浏览器可能存在的旧Cookie，避免冲突
+        
         self._log("正在清除旧的Cookie...")
         self.driver.delete_all_cookies()
 
         self._log("正在解析并添加Cookie...")
-        # 3. 逐个解析并添加Cookie
         cookies_list = cookie_string.split('; ')
         for cookie_item in cookies_list:
             if '=' in cookie_item:
                 name, value = cookie_item.split('=', 1)
-                cookie_dict = {
-                    'name': name.strip(),
-                    'value': value.strip(),
-                }
+                cookie_dict = {'name': name.strip(), 'value': value.strip()}
                 try:
                     self.driver.add_cookie(cookie_dict)
                 except Exception as e:
                     self._log(f"警告：添加Cookie '{name}' 失败。错误: {e}")
-
+        
         self._log("Cookie添加完成。")
-
-        # 4. [关键步骤] 刷新页面，让服务器用我们刚添加的Cookie重新验证会话
         self._log("正在刷新页面以应用Cookie...")
         self.driver.refresh()
-
-        # 短暂等待，确保刷新完成
-        WebDriverWait(self.driver, 5).until(
-            lambda d: d.execute_script('return document.readyState') == 'complete'
-        )
-
+        
+        WebDriverWait(self.driver, 5).until(lambda d: d.execute_script('return document.readyState') == 'complete')
         self._log("Cookie应用成功，脚本将以登录状态继续。")
 
     def _take_screenshot(self, filename: str = "error_screenshot.png"):
         path = os.path.join(self.report_path, filename)
+        if not self.driver:
+            self._log("Driver未初始化，无法截屏。")
+            return
         try:
             self.driver.save_screenshot(path)
             self._log(f"已截取屏幕并保存至: {path}")
@@ -143,12 +145,9 @@ class KlpbbsScraper:
         days = td.days
         hours, remainder = divmod(td.seconds, 3600)
         minutes, _ = divmod(remainder, 60)
-        if days > 0:
-            return f"{days}天 {hours}小时"
-        elif hours > 0:
-            return f"{hours}小时 {minutes}分钟"
-        else:
-            return f"{minutes}分钟"
+        if days > 0: return f"{days}天 {hours}小时"
+        elif hours > 0: return f"{hours}小时 {minutes}分钟"
+        else: return f"{minutes}分钟"
 
     def _get_color_from_value(self, value, min_val, max_val, start_color, end_color):
         if max_val == min_val: return ''.join(f'{c:02x}' for c in start_color)
@@ -161,9 +160,7 @@ class KlpbbsScraper:
     def _parse_page_with_soup(self):
         self._log(f"开始解析页面: {self.driver.current_url}")
         try:
-            # 适当延长等待时间，以应对网络波动
-            WebDriverWait(self.driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.c_threadlist ul")))
+            WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.c_threadlist ul")))
             html_content = self.driver.page_source
             soup = BeautifulSoup(html_content, 'lxml')
             threads = soup.select("div.c_threadlist ul li")
@@ -183,12 +180,11 @@ class KlpbbsScraper:
                     views = int("".join(filter(str.isdigit, views_text)))
                     last_reply_date_str = "N/A"
                     last_reply_tag_with_span = thread.select_one('em.y a[href*="goto=lastpost"] span[title]')
-                    if last_reply_tag_with_span:
-                        last_reply_date_str = last_reply_tag_with_span.get('title', '').strip()
+                    if last_reply_tag_with_span: last_reply_date_str = last_reply_tag_with_span.get('title', '').strip()
                     else:
                         last_reply_tag_direct = thread.select_one('em.y a[href*="goto=lastpost"]')
                         if last_reply_tag_direct: last_reply_date_str = last_reply_tag_direct.text.strip()
-
+                    
                     daily_views = 0.0
                     time_since_publication_str, time_since_publication_days = "无法解析", float('inf')
                     creation_date = self._parse_human_readable_date(creation_date_str)
@@ -213,10 +209,8 @@ class KlpbbsScraper:
                         "最后回复距今小时数": time_since_last_reply_hours,
                         "主题链接": thread_url
                     })
-                except Exception as e:
-                    self._log(f"解析单个主题时发生未知错误，已跳过。错误: {e}")
-        except TimeoutException:
-            self._log("错误：页面加载超时或页面结构已改变，无法找到主题列表容器。"); self._take_screenshot(); raise
+                except Exception as e: self._log(f"解析单个主题时发生未知错误，已跳过。错误: {e}")
+        except TimeoutException: self._log("错误：页面加载超时或页面结构已改变，无法找到主题列表容器。"); self._take_screenshot(); raise
 
     def _navigate_to_next_page(self) -> bool:
         try:
@@ -225,74 +219,58 @@ class KlpbbsScraper:
             self.driver.execute_script("arguments[0].click();", next_page_button)
             return True
         except NoSuchElementException:
-            self._log("未找到“下一页”按钮，已到达最后一页。");
-            return False
+            self._log("未找到“下一页”按钮，已到达最后一页。"); return False
 
     def _save_to_excel(self):
         if not self.data: self._log("没有抓取到任何数据，不生成Excel报告。"); return
         self._log(f"共抓取到 {len(self.data)} 条数据，正在生成Excel报告...")
-
+        
         df = pd.DataFrame(self.data)
         df_sorted = df.sort_values(by="主题每日浏览量", ascending=False).reset_index(drop=True)
-
+        
         columns_order = [
             "主题名称", "主题浏览量", "主题每日浏览量", "主题发布日期", "主题发布距今时间",
-            "主题最后回复日期", "最后回复距今时间", "主题链接",
+            "主题最后回复日期", "最后回复距今时间", "主题链接", 
             "主题发布距今天数", "最后回复距今小时数"
         ]
         df_final = df_sorted[columns_order]
-
-        wb = Workbook();
-        ws = wb.active;
-        ws.title = "主题帖子数据报告"
+        
+        wb = Workbook(); ws = wb.active; ws.title = "主题帖子数据报告"
 
         header_font = Font(name='微软雅黑', size=12, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4F81BD', end_color='4F81BD', fill_type='solid')
         cell_font = Font(name='微软雅黑', size=11)
         link_font = Font(name='微软雅黑', size=11, color="0563C1", underline='single')
         center_align = Alignment(horizontal='center', vertical='center', wrap_text=False)
-        border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'),
-                        bottom=Side(style='thin'))
+        border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
         for r_idx, row in enumerate(dataframe_to_rows(df_final, index=False, header=True), 1):
             ws.append(row)
             ws.row_dimensions[r_idx].height = 30
             for cell in ws[r_idx]:
-                cell.border = border;
-                cell.alignment = center_align
+                cell.border = border; cell.alignment = center_align
                 if r_idx == 1:
-                    cell.font = header_font;
-                    cell.fill = header_fill
+                    cell.font = header_font; cell.fill = header_fill
                 else:
                     cell.font = cell_font
 
         max_row = ws.max_row
         MINT_GREEN_RGB, CORAL_RED_RGB = (102, 187, 106), (239, 83, 80)
-
-        views_rule = ColorScaleRule(start_type='min', start_color='FFF8E1', mid_type='percentile', mid_value=50,
-                                    mid_color='FFB74D', end_type='max', end_color='81C784')
+        
+        views_rule = ColorScaleRule(start_type='min', start_color='FFF8E1', mid_type='percentile', mid_value=50, mid_color='FFB74D', end_type='max', end_color='81C784')
         ws.conditional_formatting.add(f"B2:C{max_row}", views_rule)
 
-        time_cols_to_format = [
-            ("主题发布距今时间", "主题发布距今天数", MINT_GREEN_RGB, CORAL_RED_RGB),
-            ("最后回复距今时间", "最后回复距今小时数", MINT_GREEN_RGB, CORAL_RED_RGB),
-        ]
-
-        for visible_col_name, helper_col_name, start_color, end_color in time_cols_to_format:
-            visible_col_idx = df_final.columns.get_loc(visible_col_name) + 1
-            helper_col_idx = df_final.columns.get_loc(helper_col_name) + 1
-
+        for visible_col_name, helper_col_name, start_color, end_color in [("主题发布距今时间", "主题发布距今天数", MINT_GREEN_RGB, CORAL_RED_RGB), ("最后回复距今时间", "最后回复距今小时数", MINT_GREEN_RGB, CORAL_RED_RGB)]:
+            visible_col_idx, helper_col_idx = df_final.columns.get_loc(visible_col_name) + 1, df_final.columns.get_loc(helper_col_name) + 1
             values = [v for v in df_final[helper_col_name] if isinstance(v, (int, float)) and v != float('inf')]
             if not values: continue
-
             min_val, max_val = min(values), max(values)
             for row_idx in range(2, max_row + 1):
                 cell = ws.cell(row=row_idx, column=visible_col_idx)
                 helper_val = ws.cell(row=row_idx, column=helper_col_idx).value
                 if isinstance(helper_val, (int, float)) and helper_val != float('inf'):
-                    color_hex = self._get_color_from_value(helper_val, min_val, max_val, start_color, end_color)
-                    cell.fill = PatternFill(start_color=color_hex, end_color=color_hex, fill_type='solid')
-
+                    cell.fill = PatternFill(start_color=self._get_color_from_value(helper_val, min_val, max_val, start_color, end_color), fill_type='solid')
+        
         ws.column_dimensions[get_column_letter(df_final.columns.get_loc("主题发布距今天数") + 1)].hidden = True
         ws.column_dimensions[get_column_letter(df_final.columns.get_loc("最后回复距今小时数") + 1)].hidden = True
 
@@ -300,14 +278,14 @@ class KlpbbsScraper:
         for row in range(2, max_row + 1):
             cell = ws.cell(row, url_col_idx)
             if cell.value and "http" in cell.value: cell.hyperlink = cell.value; cell.font = link_font
-
+        
         column_widths = {'A': 100, 'B': 12, 'C': 15, 'D': 15, 'E': 18, 'F': 20, 'G': 18, 'H': 100}
         visible_columns = [col for col in df_final.columns if '距今天数' not in col and '距今小时数' not in col]
         for i, col_name in enumerate(visible_columns):
-            ws.column_dimensions[get_column_letter(i + 1)].width = list(column_widths.values())[i]
+             ws.column_dimensions[get_column_letter(i+1)].width = list(column_widths.values())[i]
 
         ws.auto_filter.ref = f"A1:{get_column_letter(len(visible_columns))}{ws.max_row}"
-
+        
         report_filename = f"苦力怕论坛帖子数据报告_{self.now.strftime('%Y-%m-%d_%H-%M-%S')}.xlsx"
         full_report_path = os.path.join(self.report_path, report_filename)
         wb.save(full_report_path)
@@ -316,10 +294,7 @@ class KlpbbsScraper:
     def scrape(self, cookie_string: str):
         try:
             self._setup_driver()
-            # 调用登录方法
             self._login_with_cookie(cookie_string)
-
-            # 登录后，直接访问目标URL
             self._log(f"正在访问目标页面: {self.base_url}")
             self.driver.get(self.base_url)
 
@@ -327,8 +302,7 @@ class KlpbbsScraper:
             while True:
                 self._log(f"--- 正在处理第 {page_count} 页 ---")
                 self._parse_page_with_soup()
-                if not self._navigate_to_next_page():
-                    break
+                if not self._navigate_to_next_page(): break
                 page_count += 1
             self._save_to_excel()
         except Exception as e:
@@ -340,23 +314,22 @@ class KlpbbsScraper:
                 self.driver.quit()
             self._log("爬取任务结束。")
 
-
 if __name__ == '__main__':
-    # --- 用户配置区 ---
     TARGET_URL = "https://klpbbs.com/home.php?mod=space&uid=2086093&do=thread&view=me&from=space"
-    DRIVER_EXECUTABLE_PATH = os.path.join("chromedriver-win64", "chromedriver.exe")  # 本地运行时依然有效
-
-    # ============================ 从环境变量中读取Cookie ============================
-    # 当在 GitHub Actions 中运行时，它会从我们设置的秘密变量中读取
-    # 如果在本地运行，它会读取一个空字符串，并提示错误，这是安全的
+    # 本地运行时，请确保此路径正确
+    DRIVER_EXECUTABLE_PATH = os.path.join("chromedriver-win64", "chromedriver.exe")
+    
+    # 从环境变量中读取Cookie，这是为GitHub Actions设计的
     MY_COOKIE_STRING = os.getenv('KLPBBS_COOKIE', '')
-    # ==============================================================================
+    
+    # 如果是在本地运行且环境变量为空，可以手动在此处填入用于调试
+    if not MY_COOKIE_STRING:
+        print("未在环境变量中找到Cookie，请在本地代码中手动填入Cookie字符串用于调试。")
+        # MY_COOKIE_STRING = "在这里粘贴你的Cookie来进行本地调试"
 
-    # 初始化爬虫实例
     scraper = KlpbbsScraper(
         base_url=TARGET_URL,
         driver_path=DRIVER_EXECUTABLE_PATH
     )
-
-    # 运行爬虫，并把Cookie传进去
+    
     scraper.scrape(cookie_string=MY_COOKIE_STRING)
