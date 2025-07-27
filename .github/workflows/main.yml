@@ -12,7 +12,7 @@ on:
     # 这是CRON表达式，表示在每天的UTC时间0点0分运行
     # UTC 0点 对应北京时间早上8点
     # 你可以访问 https://crontab.guru/ 来生成你想要的时间
-    - cron: '0 0 * * *'
+    #- cron: '0 0 * * *'
 
 jobs:
   build-and-scrape:
