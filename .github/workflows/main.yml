@@ -1,0 +1,72 @@
+# .github/workflows/main.yml
+
+name: KLPBBS Scraper CI
+
+# 控制工作流的触发条件
+on:
+  # 允许你手动在 Actions 页面点击按钮来运行这个工作流
+  workflow_dispatch:
+
+  # 定时触发
+  schedule:
+    # 这是CRON表达式，表示在每天的UTC时间0点0分运行
+    # UTC 0点 对应北京时间早上8点
+    # 你可以访问 https://crontab.guru/ 来生成你想要的时间
+    - cron: '0 0 * * *'
+
+jobs:
+  build-and-scrape:
+    # 指定运行环境为最新的Ubuntu系统
+    runs-on: ubuntu-latest
+
+    steps:
+      # 第一步：获取你的仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 第二步：设置Python环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 你可以指定一个Python版本
+
+      # 第三步：安装Python依赖库
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # 第四步：安装Google Chrome和对应的ChromeDriver
+      - name: Install Google Chrome and ChromeDriver
+        run: |
+          # 安装Chrome稳定版
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          # 获取Chrome版本
+          CHROME_VERSION=$(google-chrome --version | cut -f 3 -d ' ' | cut -f 1 -d '.')
+          echo "Installed Chrome version: $CHROME_VERSION"
+          # 根据Chrome版本下载对应的ChromeDriver
+          wget -q https://storage.googleapis.com/chrome-for-testing-public/LATEST_RELEASE_${CHROME_VERSION} -O LATEST_RELEASE
+          DRIVER_VERSION=$(cat LATEST_RELEASE)
+          echo "Matching ChromeDriver version: $DRIVER_VERSION"
+          wget -q https://storage.googleapis.com/chrome-for-testing-public/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip
+          unzip chromedriver-linux64.zip
+          # 将chromedriver移动到系统路径，这样selenium才能找到它
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+
+      # 第五步：运行你的Python脚本
+      - name: Run the scraper script
+        env:
+          # 将我们设置的秘密Cookie注入到环境变量中
+          KLPBBS_COOKIE: ${{ secrets.KLPBBS_COOKIE }}
+        run: python 苦力怕脚本获取.py
+
+      # 第六步：上传生成的Excel报告
+      - name: Upload Excel report
+        uses: actions/upload-artifact@v4
+        with:
+          # 这是构件的名称，你可以自定义
+          name: klpbbs-report
+          # 这是要上传的文件路径，支持通配符
+          # 它会自动找到所有以 "苦力怕论坛帖子数据报告_" 开头的.xlsx文件
+          path: ./苦力怕论坛帖子数据报告_*.xlsx
